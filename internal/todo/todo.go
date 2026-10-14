@@ -1,8 +1,9 @@
 // Package todo holds the domain of the application: the Todo entity, the
-// parameter and result types that cross package boundaries, and the errors
-// other packages test for. It imports only the standard library, so every
-// other package can import it without creating a cycle, and it knows nothing
-// about HTTP or storage.
+// parameter and result types that cross package boundaries, the rules that
+// apply to them (the Service), the Store interface the Service needs, and the
+// errors other packages test for. It imports only the standard library, so
+// every other package can import it without creating a cycle, and it knows
+// nothing about HTTP or storage.
 //
 // It lives under internal/ so the go command enforces who may import it: only
 // code rooted at the parent of the internal directory, which here means this
@@ -21,6 +22,21 @@ type Todo struct {
 	Done      bool      `json:"done"`
 	CreatedAt time.Time `json:"createdAt"` // UTC, truncated to microseconds
 	UpdatedAt time.Time `json:"updatedAt"` // UTC; bumped on every mutation
+}
+
+// CreateParams is what a caller supplies to create a todo. Everything else
+// (the id, both timestamps, done = false) is decided by the Service and the store.
+type CreateParams struct {
+	Title string
+}
+
+// UpdateParams is a partial update. A nil pointer means "not supplied", which
+// is how Go tells {"done":false} apart from {}: the first flips a todo back to
+// open, the second must leave done alone. JSON null also decodes to nil, so
+// null is treated as absent.
+type UpdateParams struct {
+	Title *string
+	Done  *bool
 }
 
 // ListFilter narrows and pages a listing. A nil Done means "both".
@@ -46,5 +62,10 @@ type Stats struct {
 	Done  int `json:"done"`
 }
 
-// DefaultLimit is the page size used when a caller does not ask for one.
-const DefaultLimit = 50
+const (
+	// DefaultLimit is the page size used when a caller does not ask for one.
+	DefaultLimit = 50
+	// MaxTitleRunes bounds a title in characters (runes), not bytes: "é" is one
+	// character even though it takes two bytes in UTF-8.
+	MaxTitleRunes = 200
+)

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"todoapp/internal/memstore"
+	"todoapp/internal/todo"
 	"todoapp/internal/web"
 )
 
@@ -61,10 +62,12 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 	}
 
 	// Dependency wiring reads bottom-up: the store knows nothing about HTTP, the
-	// server receives the store, main receives the server. Nothing reaches for a
+	// Service receives the store through the todo.Store interface, the server
+	// receives the Service, main receives the server. Nothing reaches for a
 	// package-level variable, so a test can build the same graph with a fresh store.
 	store := memstore.New()
-	srv := web.NewServer(web.Deps{Store: store, Logger: logger})
+	svc := todo.NewService(store)
+	srv := web.NewServer(web.Deps{Service: svc, Logger: logger})
 
 	// Bind here, synchronously, before anything runs in the background. A port
 	// that is already taken is an immediate error with a clear message, and
