@@ -1,0 +1,11 @@
+# The stray binary that used to live in the repo root; `make build` writes to bin/ instead.
+# (A # only starts a comment at the beginning of a line; trailing comments become part of the pattern.)
+/api
+/bin/
+/data/
+*.db
+*.db-wal
+*.db-shm
+.env
+coverage.out
+.DS_Store
