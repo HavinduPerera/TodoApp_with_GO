@@ -1,0 +1,14 @@
+{
+  // "afterDelay" autosaves skip formatters and save-time code actions,
+  // so format-on-save never fires. "onFocusChange" still autosaves, but
+  // goes through the normal save path.
+  "files.autoSave": "onFocusChange",
+
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  }
+}
