@@ -1,25 +1,25 @@
-// Package web is the HTTP transport: routing, JSON encoding, and the mapping
-// from errors to status codes. It depends on the todo package for shapes and
-// errors and, for now, on the concrete memstore; milestone 4 replaces that
-// with the todo.Service so this package stops knowing where data lives, and
-// milestone 9 adds middleware.
+// Package web is the HTTP transport: routing, JSON decoding and encoding, and
+// the mapping from errors to status codes. It depends on the todo package for
+// shapes, errors and the Service, and on nothing that knows where data lives.
+// Milestone 9 adds middleware here.
 package web
 
 import (
 	"log/slog"
 	"net/http"
 
-	"todoapp/internal/memstore"
+	"todoapp/internal/todo"
 )
 
 // Deps is everything a Server needs from the outside. Passing dependencies in
 // explicitly, instead of reaching for package-level variables, is what makes a
 // Server constructible in a test with a fresh store and a silent logger.
 type Deps struct {
-	// Store is concrete for now. Milestone 4 swaps this field for a
-	// *todo.Service (also concrete: there is no Service interface); the one
-	// interface in the app, todo.Store, lands between the Service and its store.
-	Store *memstore.Store
+	// Service applies the domain rules; handlers never touch a store directly.
+	// It is concrete on purpose: there is no Service interface, so handler
+	// tests run the real rules over a real (in-memory) store. The one interface
+	// in the app, todo.Store, sits between the Service and its store.
+	Service *todo.Service
 	// Logger nil falls back to slog.Default(). This is the one place the package
 	// touches the global logger, resolved once here so no handler ever does.
 	Logger *slog.Logger
@@ -28,20 +28,21 @@ type Deps struct {
 // Server is the http.Handler for the whole app. Create it with NewServer: the
 // zero value has a nil mux, so its ServeHTTP panics rather than answering 404.
 type Server struct {
-	store  *memstore.Store
+	svc    *todo.Service
 	logger *slog.Logger
 	mux    *http.ServeMux
 }
 
 // NewServer wires routes to handlers. It returns the concrete *Server rather
-// than an http.Handler ("accept interfaces, return structs"): a caller that
-// only needs an http.Handler already has one, and a caller that needs more can
-// see what it holds.
+// than an http.Handler, the "return structs" half of the community rule
+// "accept interfaces, return structs" (NewService shows the other half): a
+// caller that only needs an http.Handler already has one, and a caller that
+// needs more can see what it holds.
 func NewServer(d Deps) *Server {
-	if d.Store == nil {
-		panic("web: Deps.Store is nil") // a wiring mistake is a programmer error: fail at construction, not on the first request
+	if d.Service == nil {
+		panic("web: Deps.Service is nil") // a wiring mistake is a programmer error: fail at construction, not on the first request
 	}
-	s := &Server{store: d.Store, logger: d.Logger, mux: http.NewServeMux()}
+	s := &Server{svc: d.Service, logger: d.Logger, mux: http.NewServeMux()}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}

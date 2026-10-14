@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"todoapp/internal/memstore"
+	"todoapp/internal/todo"
 	"todoapp/internal/web"
 )
 
@@ -27,7 +28,7 @@ func TestServeShutsDown(t *testing.T) {
 	defer cancel() // if the test fails early, this still lets serve return and the goroutine exit
 
 	logger := slog.New(slog.DiscardHandler)
-	handler := web.NewServer(web.Deps{Store: memstore.New(), Logger: logger})
+	handler := web.NewServer(web.Deps{Service: todo.NewService(memstore.New()), Logger: logger})
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- serve(ctx, ln, handler, logger, 2*time.Second)
