@@ -1,9 +1,10 @@
-// Command api is the HTTP server for todoapp.
+// Command api is the HTTP server for todoapp. This file is wiring and
+// lifecycle only: it builds the pieces, connects them, and decides how the
+// process starts and stops. Handlers live in internal/web, data in a store.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,22 +15,10 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"todoapp/internal/memstore"
+	"todoapp/internal/web"
 )
-
-// Todo is the shape GET /api/todos returns. The data is the hardcoded slice
-// below until milestone 3 moves it behind an in-memory store (SQLite replaces
-// that in milestone 8).
-type Todo struct {
-	ID        int       `json:"id"`
-	Title     string    `json:"title"`
-	Done      bool      `json:"done"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
-var todos = []Todo{
-	{ID: 1, Title: "Understand how a Go handler works", Done: true, CreatedAt: time.Now()},
-	{ID: 2, Title: "Replace this hardcoded slice", Done: false, CreatedAt: time.Now()},
-}
 
 // defaultAddr is loopback on purpose: there is no authentication yet, so the
 // server should not be reachable from the rest of the network by default.
@@ -58,7 +47,7 @@ func main() {
 	}
 }
 
-// run wires the server together and blocks until ctx is cancelled or the
+// run wires the application together and blocks until ctx is cancelled or the
 // server fails. It takes its inputs as parameters instead of reaching for
 // os.Getenv and os.Stderr itself, so a test can hand it a closure over a map
 // and a bytes.Buffer.
@@ -71,6 +60,12 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 		addr = defaultAddr
 	}
 
+	// Dependency wiring reads bottom-up: the store knows nothing about HTTP, the
+	// server receives the store, main receives the server. Nothing reaches for a
+	// package-level variable, so a test can build the same graph with a fresh store.
+	store := memstore.New()
+	srv := web.NewServer(web.Deps{Store: store, Logger: logger})
+
 	// Bind here, synchronously, before anything runs in the background. A port
 	// that is already taken is an immediate error with a clear message, and
 	// because the listener exists before serve starts, ln.Addr() is the real
@@ -81,7 +76,7 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 	}
 	logger.Info("server listening", "addr", ln.Addr().String())
 
-	return serve(ctx, ln, newHandler(), logger, shutdownTimeout)
+	return serve(ctx, ln, srv, logger, shutdownTimeout)
 }
 
 // serve runs an http.Server on ln until ctx is cancelled, then drains it and
@@ -152,46 +147,4 @@ func serve(ctx context.Context, ln net.Listener, handler http.Handler, logger *s
 	}
 	logger.Info("shutdown complete")
 	return nil
-}
-
-// newHandler builds the router. Keeping it separate from run lets a test call
-// its ServeHTTP through httptest without opening a socket.
-func newHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthz)
-	mux.HandleFunc("GET /api/todos", listTodos)
-	mux.HandleFunc("GET /api/todos/count", countTodos)
-	return mux
-}
-
-// healthz answers "is the process up". It deliberately touches nothing else,
-// so a liveness probe never flaps because of a slow dependency.
-func healthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func listTodos(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, todos)
-}
-
-func countTodos(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]int{"count": len(todos)})
-}
-
-// writeJSON is the one place a response body is encoded. Marshalling before
-// WriteHeader means a value that cannot be encoded becomes a clean 500 instead
-// of a 200 whose body never arrives. In milestone 3 this helper moves to the
-// web package, gets an injected logger, and gains a JSON error envelope.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	body, err := json.Marshal(v)
-	if err != nil {
-		slog.Error("encode response", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if _, err := w.Write(body); err != nil {
-		slog.Debug("write response", "err", err) // almost always: the client went away
-	}
 }

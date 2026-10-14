@@ -10,9 +10,10 @@ and the full fifteen-milestone plan live in [ARCHITECTURE.md](ARCHITECTURE.md).
 |---|---|---|
 | 1 | `main` → `run`, `log/slog`, server timeouts, `TODO_ADDR`, `GET /healthz`, Makefile, first `httptest` test | done |
 | 2 | Graceful shutdown: signal context in `main`, synchronous bind, `serve()` with `Shutdown` | done |
-| 3 | In-memory store, full CRUD, list envelope | next |
+| 3 | Domain package (`internal/todo`), in-memory store (`internal/memstore`), HTTP package (`internal/web`), list envelope, `GET /api/todos/{id}`, `/stats` replaces `/count` | done |
+| 4 | Store interface, Service, create/update/delete endpoints, the full error envelope | next |
 
-Milestones 3 to 15 are described in ARCHITECTURE.md, section 11.
+Milestones 4 to 15 are described in ARCHITECTURE.md, section 11.
 
 ## Requirements
 
@@ -40,12 +41,14 @@ finish, the log shows `shutdown complete`, and the exit code is 0.
 | Method | Path | Response |
 |---|---|---|
 | GET | `/healthz` | `{"status":"ok"}`; liveness only, touches nothing else |
-| GET | `/api/todos` | the todo list (hardcoded until milestone 3) |
-| GET | `/api/todos/count` | `{"count":2}` (becomes `/api/todos/stats` in milestone 3) |
+| GET | `/api/todos` | `{"items":[…],"total":2,"limit":50,"offset":0}`, newest first (in-memory until milestone 8) |
+| GET | `/api/todos/{id}` | one todo; `404` `not_found` if it does not exist, `400` `bad_request` if the id is not a positive integer |
+| GET | `/api/todos/stats` | `{"total":2,"open":1,"done":1}` |
 
 ```bash
 curl -si localhost:8080/healthz
 curl -s localhost:8080/api/todos
+curl -si localhost:8080/api/todos/99
 ```
 
 ## Develop
@@ -60,7 +63,10 @@ curl -s localhost:8080/api/todos
 ## Layout
 
 ```
-cmd/api/           main.go (wiring and lifecycle), main_test.go
-ARCHITECTURE.md    design, decisions, milestones
+cmd/api/            main.go (wiring and lifecycle), main_test.go
+internal/todo/      the domain: Todo, ListFilter, Page, Stats, ErrNotFound; stdlib only
+internal/memstore/  in-memory store: RWMutex + map, seeded with two todos
+internal/web/       HTTP: routes, handlers, JSON encoding, the error envelope
+ARCHITECTURE.md     design, decisions, milestones
 Makefile
 ```
