@@ -1,8 +1,9 @@
 // Package memstore is an in-memory todo store guarded by a mutex. It is the
 // first store the app gets and it is deliberately simple: a map, a counter
-// and a lock. It satisfies todo.Store without saying so: Go interfaces are
-// implicit, so having the methods is enough. Milestone 8 retires it once the
-// SQLite store passes the same tests.
+// and a lock. It satisfies todo.Store implicitly: Go interfaces need no
+// declaration, having the methods is enough, and the var _ line below only
+// checks that at compile time. Milestone 8 retires it once the SQLite store
+// passes the same tests.
 //
 // The package is named for what it is, a short noun, not for the layer it
 // sits in: Go packages are "memstore" and "sqlite", never "models" or "utils".
@@ -31,23 +32,24 @@ type Store struct {
 	nextID int64
 }
 
-// New returns a Store seeded with the two todos the hardcoded slice used to
-// hold, so this milestone changes the structure of the app, not its answers.
+// Compile-time assertion that *Store satisfies todo.Store. Interfaces are
+// satisfied implicitly in Go, so without this line a missing or misspelled
+// method would only surface at whichever call site passes a *Store as a
+// todo.Store (cmd/api, the tests), far from the type; with it, the error
+// appears here, in the package that owns the type. The expression costs
+// nothing: a nil pointer converted to the interface and assigned to the blank
+// identifier.
+var _ todo.Store = (*Store)(nil)
+
+// New returns an empty Store. Example data is the application's business (see
+// cmd/api), not the store's: the conformance suite must start every
+// implementation from the same state, and empty is the only state an
+// in-memory map and a fresh SQLite file can share.
 func New() *Store {
-	s := &Store{todos: make(map[int64]todo.Todo)}
-	// UTC so the JSON form carries Z rather than this machine's offset; UTC()
-	// also drops the monotonic clock reading, so == holds after a JSON round
-	// trip. Truncate to microseconds matches the precision the SQLite TEXT
-	// column will store from milestone 8: JSON itself keeps nanoseconds, so the
-	// truncation is for the future store, not for the wire.
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	s.insert(todo.Todo{Title: "Understand how a Go handler works", Done: true, CreatedAt: now, UpdatedAt: now})
-	s.insert(todo.Todo{Title: "Replace this hardcoded slice", Done: false, CreatedAt: now, UpdatedAt: now})
-	return s
+	return &Store{todos: make(map[int64]todo.Todo)}
 }
 
-// insert assigns the next id and stores t. Callers must hold mu for writing;
-// New does not need to, because nothing else can see the Store yet.
+// insert assigns the next id and stores t. Callers must hold mu for writing.
 func (s *Store) insert(t todo.Todo) todo.Todo {
 	s.nextID++
 	t.ID = s.nextID
@@ -57,8 +59,10 @@ func (s *Store) insert(t todo.Todo) todo.Todo {
 
 // Create assigns the next id and stores t. It takes the write lock: a reader
 // must not observe the map mid-insert, and two Creates must never hand out the
-// same id. (Milestone 5 removes this lock on purpose to watch the race
-// detector catch it.)
+// same id. Remove the two lock lines and run `go test -race ./internal/memstore`
+// to watch the conformance suite's concurrent_writers catch it: WARNING: DATA
+// RACE blocks pointing at insert, then the runtime's own "fatal error:
+// concurrent map writes" aborting the test binary.
 func (s *Store) Create(ctx context.Context, t todo.Todo) (todo.Todo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

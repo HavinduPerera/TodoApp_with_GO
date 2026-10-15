@@ -22,13 +22,26 @@ var fixed = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 
 const jsonCT = "application/json"
 
-// newServer builds a Server over the real Service and a fresh seeded store,
-// with a silent logger and a pinned clock. The Service is returned too so a
-// test can move the clock between requests.
+// newServer builds a Server over the real Service and a fresh store holding
+// the two example todos (id 1 done, id 2 open, like a fresh `make run`), with a
+// silent logger and a pinned clock. The Service is returned too so a test can
+// move the clock between requests. Every test gets its own server, which is
+// what makes t.Parallel safe below.
 func newServer(t *testing.T) (http.Handler, *todo.Service) {
 	t.Helper()
 	svc := todo.NewService(memstore.New())
 	svc.Now = func() time.Time { return fixed }
+	first, err := svc.Create(t.Context(), todo.CreateParams{Title: "Understand how a Go handler works"})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	done := true
+	if _, err := svc.Update(t.Context(), first.ID, todo.UpdateParams{Done: &done}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := svc.Create(t.Context(), todo.CreateParams{Title: "Replace the in-memory store with SQLite"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	return web.NewServer(web.Deps{Service: svc, Logger: slog.New(slog.DiscardHandler)}), svc
 }
 
@@ -83,6 +96,7 @@ type wireTodo struct {
 }
 
 func TestHealthz(t *testing.T) {
+	t.Parallel() // independent server per test: nothing shared, so tests may overlap; handlers then really run concurrently, which is the only way -race can catch shared state inside web
 	h, _ := newServer(t)
 	res := get(t, h, "/healthz")
 	if res.StatusCode != http.StatusOK {
@@ -98,6 +112,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestReadRoutes(t *testing.T) {
+	t.Parallel()
 	h, _ := newServer(t)
 	tests := []struct {
 		name       string
@@ -117,6 +132,7 @@ func TestReadRoutes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel() // read-only rows against one server: safe to overlap
 			res := get(t, h, tt.path)
 			if res.StatusCode != tt.wantStatus {
 				t.Fatalf("GET %s: status = %d, want %d", tt.path, res.StatusCode, tt.wantStatus)
@@ -136,6 +152,7 @@ func TestReadRoutes(t *testing.T) {
 // TestRequestErrors has one row per way a write request can be wrong. Each row
 // is a contract line from the API table in ARCHITECTURE.md §5.
 func TestRequestErrors(t *testing.T) {
+	t.Parallel()
 	h, _ := newServer(t)
 	tests := []struct {
 		name        string
@@ -178,6 +195,7 @@ func TestRequestErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel() // every row is rejected before it can change anything, so rows may overlap
 			res := do(t, h, tt.method, tt.path, tt.contentType, tt.body)
 			if res.StatusCode != tt.wantStatus {
 				b, _ := io.ReadAll(res.Body)
@@ -199,6 +217,7 @@ func TestRequestErrors(t *testing.T) {
 }
 
 func TestCreatePatchDeleteFlow(t *testing.T) {
+	t.Parallel()
 	h, svc := newServer(t)
 
 	// Create: 201, Location, body is the new todo with both timestamps = now.
@@ -261,7 +280,28 @@ func TestCreatePatchDeleteFlow(t *testing.T) {
 	}
 }
 
+// TestEmptyListIsAnEmptyArray drives an unseeded server: the API promises []
+// for an empty list, never null, and only a raw look at the bytes can tell the
+// two apart (a []wireTodo decodes both to nil).
+func TestEmptyListIsAnEmptyArray(t *testing.T) {
+	t.Parallel()
+	h := web.NewServer(web.Deps{Service: todo.NewService(memstore.New()), Logger: slog.New(slog.DiscardHandler)})
+	res := get(t, h, "/api/todos")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+	}
+	var page struct {
+		Items json.RawMessage `json:"items"`
+		Total int             `json:"total"`
+	}
+	decode(t, res, &page)
+	if string(page.Items) != "[]" || page.Total != 0 {
+		t.Errorf("items = %s, total = %d; want [] and 0", page.Items, page.Total)
+	}
+}
+
 func TestListEnvelope(t *testing.T) {
+	t.Parallel()
 	h, _ := newServer(t)
 	res := get(t, h, "/api/todos")
 	if res.StatusCode != http.StatusOK {
@@ -289,6 +329,7 @@ func TestListEnvelope(t *testing.T) {
 }
 
 func TestStats(t *testing.T) {
+	t.Parallel()
 	h, _ := newServer(t)
 	res := get(t, h, "/api/todos/stats")
 	if res.StatusCode != http.StatusOK {
