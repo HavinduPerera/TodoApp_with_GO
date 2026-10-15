@@ -67,6 +67,9 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 	// package-level variable, so a test can build the same graph with a fresh store.
 	store := memstore.New()
 	svc := todo.NewService(store)
+	if err := seedIfEmpty(ctx, svc); err != nil {
+		return fmt.Errorf("seed: %w", err)
+	}
 	srv := web.NewServer(web.Deps{Service: svc, Logger: logger})
 
 	// Bind here, synchronously, before anything runs in the background. A port
@@ -80,6 +83,30 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 	logger.Info("server listening", "addr", ln.Addr().String())
 
 	return serve(ctx, ln, srv, logger, shutdownTimeout)
+}
+
+// seedIfEmpty gives an empty store two example todos so a fresh `make run` has
+// something to show. It goes through the Service like any client would, so the
+// examples obey the same rules as real data. This is development convenience,
+// not a product feature: milestone 8 puts it behind TODO_SEED once data persists.
+func seedIfEmpty(ctx context.Context, svc *todo.Service) error {
+	st, err := svc.Stats(ctx)
+	if err != nil {
+		return err
+	}
+	if st.Total > 0 {
+		return nil
+	}
+	first, err := svc.Create(ctx, todo.CreateParams{Title: "Understand how a Go handler works"})
+	if err != nil {
+		return err
+	}
+	done := true
+	if _, err := svc.Update(ctx, first.ID, todo.UpdateParams{Done: &done}); err != nil {
+		return err
+	}
+	_, err = svc.Create(ctx, todo.CreateParams{Title: "Replace the in-memory store with SQLite"})
+	return err
 }
 
 // serve runs an http.Server on ln until ctx is cancelled, then drains it and

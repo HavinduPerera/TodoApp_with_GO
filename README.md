@@ -12,9 +12,10 @@ and the full fifteen-milestone plan live in [ARCHITECTURE.md](ARCHITECTURE.md).
 | 2 | Graceful shutdown: signal context in `main`, synchronous bind, `serve()` with `Shutdown` | done |
 | 3 | Domain package (`internal/todo`), in-memory store (`internal/memstore`), HTTP package (`internal/web`), list envelope, `GET /api/todos/{id}`, `/stats` replaces `/count` | done |
 | 4 | `todo.Store` interface, `todo.Service` (validation, timestamps, defaults), `POST`/`PATCH`/`DELETE`, strict JSON decoding, the full error envelope | done |
-| 5 | Store conformance suite, race detector | next |
+| 5 | Store conformance suite in `internal/todo/todotest`, compile-time `Store` assertion, parallel handler tests, the race-detector exercise; example todos now seeded from `cmd/api` | done |
+| 6 | Config package, version stamping, `.env` | next |
 
-Milestones 5 to 15 are described in ARCHITECTURE.md, section 11.
+Milestones 6 to 15 are described in ARCHITECTURE.md, section 11.
 
 ## Requirements
 
@@ -81,7 +82,7 @@ curl -si -X DELETE localhost:8080/api/todos/3
 | Command | What it does |
 |---|---|
 | `make build` | static binary at `bin/api` (`CGO_ENABLED=0`) |
-| `make test` | `go test -race -shuffle=on -count=1 ./...` |
+| `make test` | `go test -race -shuffle=on -count=1 ./...`; try removing the lock in `memstore.Create` and watch `concurrent_writers` report a data race |
 | `make vet` | `go vet ./...` |
 | `make fmt` | fails if any file is not `gofmt`-formatted |
 
@@ -90,7 +91,8 @@ curl -si -X DELETE localhost:8080/api/todos/3
 ```
 cmd/api/            main.go (wiring and lifecycle), main_test.go
 internal/todo/      the domain: Todo and params, validation, the Store interface, the Service; stdlib only
-internal/memstore/  in-memory store: RWMutex + map, seeded with two todos
+internal/todo/todotest/  the conformance suite every Store must pass (run by memstore now, SQLite later)
+internal/memstore/  in-memory store: RWMutex + map; starts empty
 internal/web/       HTTP: routes, handlers, strict JSON decoding, the error envelope
 ARCHITECTURE.md     design, decisions, milestones
 Makefile
