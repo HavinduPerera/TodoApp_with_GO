@@ -13,22 +13,23 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
+	"todoapp/internal/config"
 	"todoapp/internal/memstore"
 	"todoapp/internal/todo"
 	"todoapp/internal/web"
 )
 
-// defaultAddr is loopback on purpose: there is no authentication yet, so the
-// server should not be reachable from the rest of the network by default.
-const defaultAddr = "127.0.0.1:8080"
-
-// shutdownTimeout is how long in-flight requests get to finish after a stop
-// signal before the process gives up on them. It becomes TODO_SHUTDOWN_TIMEOUT
-// in milestone 6.
-const shutdownTimeout = 10 * time.Second
+// version is set at build time by the linker:
+//
+//	go build -ldflags "-X main.version=<value>"
+//
+// The Makefile passes `git describe --always --dirty`. Under a plain `go run`
+// or `go build` nothing sets it, and buildVersion falls back.
+var version string
 
 // main stays tiny: it owns the signal context and turns run's error into an
 // exit code, nothing else. os.Exit skips deferred functions, so it must only
@@ -38,7 +39,7 @@ func main() {
 	// NotifyContext hands us a context that is cancelled by the first SIGINT
 	// (Ctrl-C) or SIGTERM (docker stop, kill). The signal stays registered until
 	// stop() runs, so a second Ctrl-C during the drain is swallowed: how long we
-	// wait is decided by shutdownTimeout, not by impatience.
+	// wait is decided by the shutdown timeout, not by impatience.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -53,13 +54,15 @@ func main() {
 // os.Getenv and os.Stderr itself, so a test can hand it a closure over a map
 // and a bytes.Buffer.
 func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.Writer) error {
-	logger := slog.New(slog.NewTextHandler(stderr, nil))
-	slog.SetDefault(logger) // log.Print and friends (the log package's default logger) now come out structured too, at INFO
-
-	addr, _ := lookupEnv("TODO_ADDR") // unset and set-but-empty both mean "use the default":
-	if addr == "" {                   // net.Listen("tcp", "") would bind a random port on EVERY interface, the opposite of the loopback default
-		addr = defaultAddr
+	// Configuration is read once, here, and every bad variable is reported in
+	// this one error. Nothing below ever looks at the environment again.
+	cfg, err := config.Load(lookupEnv)
+	if err != nil {
+		return err
 	}
+	logger := newLogger(stderr, cfg)
+	slog.SetDefault(logger) // log.Print and friends (the log package's default logger) now come out structured too, at INFO
+	ver := buildVersion()   // read once, like the config, and passed to whoever needs it
 
 	// Dependency wiring reads bottom-up: the store knows nothing about HTTP, the
 	// Service receives the store through the todo.Store interface, the server
@@ -70,19 +73,62 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 	if err := seedIfEmpty(ctx, svc); err != nil {
 		return fmt.Errorf("seed: %w", err)
 	}
-	srv := web.NewServer(web.Deps{Service: svc, Logger: logger})
+	srv := web.NewServer(web.Deps{Service: svc, Logger: logger, Version: ver})
 
 	// Bind here, synchronously, before anything runs in the background. A port
 	// that is already taken is an immediate error with a clear message, and
 	// because the listener exists before serve starts, ln.Addr() is the real
 	// address: that is what lets a test listen on port 0 and ask which port it got.
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	logger.Info("server listening", "addr", ln.Addr().String())
+	logger.Info("server listening", "addr", ln.Addr().String(), "version", ver)
 
-	return serve(ctx, ln, srv, logger, shutdownTimeout)
+	return serve(ctx, ln, srv, logger, cfg.ShutdownTimeout)
+}
+
+// newLogger builds the one logger the process uses: text for a terminal, JSON
+// for anything that collects logs, at the configured minimum level.
+func newLogger(w io.Writer, cfg config.Config) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: cfg.LogLevel}
+	if cfg.LogFormat == "json" {
+		return slog.New(slog.NewJSONHandler(w, opts))
+	}
+	return slog.New(slog.NewTextHandler(w, opts))
+}
+
+// buildVersion reports what is running, from the most deliberate source to
+// the least: the version the build explicitly linked in, then the VCS revision
+// the go command records on its own when `go build` runs inside a git checkout
+// (-buildvcs=auto), then "dev". `go run` leaves that automatic stamping off,
+// and a Docker build context usually has no .git, so those two show "dev"
+// unless -X is passed.
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		var revision, modified string
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				revision = s.Value
+			case "vcs.modified":
+				modified = s.Value
+			}
+		}
+		if revision != "" {
+			if len(revision) > 12 {
+				revision = revision[:12]
+			}
+			if modified == "true" {
+				revision += "-dirty"
+			}
+			return revision
+		}
+	}
+	return "dev"
 }
 
 // seedIfEmpty gives an empty store two example todos so a fresh `make run` has

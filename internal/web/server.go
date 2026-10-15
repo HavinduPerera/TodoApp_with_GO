@@ -23,14 +23,17 @@ type Deps struct {
 	// Logger nil falls back to slog.Default(). This is the one place the package
 	// touches the global logger, resolved once here so no handler ever does.
 	Logger *slog.Logger
+	// Version is reported by /healthz so an operator can see what is running.
+	Version string
 }
 
 // Server is the http.Handler for the whole app. Create it with NewServer: the
 // zero value has a nil mux, so its ServeHTTP panics rather than answering 404.
 type Server struct {
-	svc    *todo.Service
-	logger *slog.Logger
-	mux    *http.ServeMux
+	svc     *todo.Service
+	logger  *slog.Logger
+	version string
+	mux     *http.ServeMux
 }
 
 // NewServer wires routes to handlers. It returns the concrete *Server rather
@@ -42,7 +45,7 @@ func NewServer(d Deps) *Server {
 	if d.Service == nil {
 		panic("web: Deps.Service is nil") // a wiring mistake is a programmer error: fail at construction, not on the first request
 	}
-	s := &Server{svc: d.Service, logger: d.Logger, mux: http.NewServeMux()}
+	s := &Server{svc: d.Service, logger: d.Logger, version: d.Version, mux: http.NewServeMux()}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}

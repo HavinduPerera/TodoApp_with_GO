@@ -13,9 +13,10 @@ and the full fifteen-milestone plan live in [ARCHITECTURE.md](ARCHITECTURE.md).
 | 3 | Domain package (`internal/todo`), in-memory store (`internal/memstore`), HTTP package (`internal/web`), list envelope, `GET /api/todos/{id}`, `/stats` replaces `/count` | done |
 | 4 | `todo.Store` interface, `todo.Service` (validation, timestamps, defaults), `POST`/`PATCH`/`DELETE`, strict JSON decoding, the full error envelope | done |
 | 5 | Store conformance suite in `internal/todo/todotest`, compile-time `Store` assertion, parallel handler tests, the race-detector exercise; example todos now seeded from `cmd/api` | done |
-| 6 | Config package, version stamping, `.env` | next |
+| 6 | `internal/config` with `Load(lookup)`, log level and format, shutdown timeout, version stamping via `-ldflags -X` with a build-info fallback, `.env.example` and `.env` loading in the Makefile | done |
+| 7 | SQLite plumbing: driver, pragmas, embedded migrations, `/readyz` | next |
 
-Milestones 6 to 15 are described in ARCHITECTURE.md, section 11.
+Milestones 7 to 15 are described in ARCHITECTURE.md, section 11.
 
 ## Requirements
 
@@ -28,21 +29,45 @@ Milestones 6 to 15 are described in ARCHITECTURE.md, section 11.
 make run
 ```
 
-The server listens on `127.0.0.1:8080` by default (loopback only, because there
-is no authentication yet). Override the address with `TODO_ADDR`:
+Ctrl-C or SIGTERM stops it gracefully: in-flight requests get up to the shutdown
+timeout to finish, the log shows `shutdown complete`, and the exit code is 0.
+
+## Configuration
+
+Everything comes from environment variables, read once at startup. An unset or
+empty variable keeps its default; an invalid one stops the process with an error
+that names it, and every invalid variable is reported together.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TODO_ADDR` | `127.0.0.1:8080` | address to listen on; loopback only until authentication exists |
+| `TODO_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` (any case; offsets like `warn+2` work) |
+| `TODO_LOG_FORMAT` | `text` | `text` for a terminal, `json` for anything that collects logs |
+| `TODO_SHUTDOWN_TIMEOUT` | `10s` | how long in-flight requests get after a stop signal |
 
 ```bash
-TODO_ADDR=127.0.0.1:9090 make run
+TODO_ADDR=127.0.0.1:9090 TODO_LOG_FORMAT=json make run
 ```
 
-Ctrl-C or SIGTERM stops it gracefully: in-flight requests get up to 10 seconds to
-finish, the log shows `shutdown complete`, and the exit code is 0.
+For local work, copy `.env.example` to `.env`, then uncomment and edit the lines
+you want: the Makefile loads it into the environment for `make run` and the other
+targets. The binary never reads `.env` itself; in a container, pass `-e` or
+`--env-file`. A value set in `.env` beats the same variable in your shell for
+make targets, so to override it for one run pass a make variable instead:
+
+```bash
+make run TODO_ADDR=127.0.0.1:9090
+```
+
+`make build` stamps the git revision into the binary, and the startup log and
+`/healthz` report it. A plain `go build` reports the revision the go command
+records itself; `go run` reports `dev`.
 
 ## Endpoints
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/healthz` | `{"status":"ok"}`; liveness only, touches nothing else |
+| GET | `/healthz` | `{"status":"ok","version":"<git revision>"}`; liveness only, touches nothing else |
 | GET | `/api/todos` | `{"items":[…],"total":2,"limit":50,"offset":0}`, newest first (in-memory until milestone 8) |
 | GET | `/api/todos/{id}` | one todo; `404` `not_found` if it does not exist, `400` `bad_request` if the id is not a positive integer |
 | GET | `/api/todos/stats` | `{"total":2,"open":1,"done":1}` |
@@ -81,7 +106,7 @@ curl -si -X DELETE localhost:8080/api/todos/3
 
 | Command | What it does |
 |---|---|
-| `make build` | static binary at `bin/api` (`CGO_ENABLED=0`) |
+| `make build` | static binary at `bin/api` (`CGO_ENABLED=0`), version stamped from `git describe` |
 | `make test` | `go test -race -shuffle=on -count=1 ./...`; try removing the lock in `memstore.Create` and watch `concurrent_writers` report a data race |
 | `make vet` | `go vet ./...` |
 | `make fmt` | fails if any file is not `gofmt`-formatted |
@@ -90,6 +115,7 @@ curl -si -X DELETE localhost:8080/api/todos/3
 
 ```
 cmd/api/            main.go (wiring and lifecycle), main_test.go
+internal/config/    environment variables → one validated Config
 internal/todo/      the domain: Todo and params, validation, the Store interface, the Service; stdlib only
 internal/todo/todotest/  the conformance suite every Store must pass (run by memstore now, SQLite later)
 internal/memstore/  in-memory store: RWMutex + map; starts empty
