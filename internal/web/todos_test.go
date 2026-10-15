@@ -42,7 +42,7 @@ func newServer(t *testing.T) (http.Handler, *todo.Service) {
 	if _, err := svc.Create(t.Context(), todo.CreateParams{Title: "Replace the in-memory store with SQLite"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return web.NewServer(web.Deps{Service: svc, Logger: slog.New(slog.DiscardHandler)}), svc
+	return web.NewServer(web.Deps{Service: svc, Logger: slog.New(slog.DiscardHandler), Version: "test"}), svc
 }
 
 // do drives the handler directly, no socket, and returns the response as a
@@ -103,11 +103,12 @@ func TestHealthz(t *testing.T) {
 		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
 	}
 	var body struct {
-		Status string `json:"status"`
+		Status  string `json:"status"`
+		Version string `json:"version"`
 	}
 	decode(t, res, &body)
-	if body.Status != "ok" {
-		t.Errorf("status = %q, want %q", body.Status, "ok")
+	if body.Status != "ok" || body.Version != "test" {
+		t.Errorf("body = %+v, want status ok and the Version NewServer was given", body)
 	}
 }
 
