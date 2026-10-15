@@ -15,6 +15,7 @@ import "net/http"
 // is a wildcard are neither more specific, and registering both panics.
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.healthz)
+	s.mux.HandleFunc("GET /readyz", s.readyz)
 
 	s.mux.Handle("GET /api/todos", s.handle(s.listTodos))
 	s.mux.Handle("POST /api/todos", s.handle(s.createTodo))

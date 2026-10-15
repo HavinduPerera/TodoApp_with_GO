@@ -310,7 +310,7 @@ Bookkeeping table, created by the runner itself (not by a numbered file):
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     name       TEXT    NOT NULL,
-    applied_at TEXT    NOT NULL
+    applied_at TEXT    NOT NULL CHECK (length(applied_at) = 27)  -- the same fixed-width UTC layout as todos
 ) STRICT;
 ```
 
@@ -577,7 +577,7 @@ The handler is registered on the method-less pattern `/`, the least specific pat
 | variable | default | notes |
 |---|---|---|
 | `TODO_ADDR` | `127.0.0.1:8080` | loopback until auth exists; the Dockerfile sets `:8080` |
-| `TODO_DB_PATH` | `./data/todo.db` | directory auto-created (M7) |
+| `TODO_DB_PATH` | `data/todo.db` | directory auto-created (M7); a plain path, escaped into the SQLite URI by `Open` |
 | `TODO_LOG_LEVEL` | `info` | parsed with `slog.Level.UnmarshalText` (`debug`, `warn`, …) |
 | `TODO_LOG_FORMAT` | `text` | `text` for terminals, `json` for containers |
 | `TODO_SHUTDOWN_TIMEOUT` | `10s` | `time.ParseDuration` |

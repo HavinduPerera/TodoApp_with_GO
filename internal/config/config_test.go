@@ -14,6 +14,7 @@ import (
 // exported by the package under test would prove nothing.
 var want = config.Config{
 	Addr:            "127.0.0.1:8080",
+	DBPath:          "data/todo.db",
 	LogLevel:        slog.LevelInfo,
 	LogFormat:       "text",
 	ShutdownTimeout: 10 * time.Second,
@@ -59,6 +60,7 @@ func TestLoadOverrides(t *testing.T) {
 		{"addr", map[string]string{"TODO_ADDR": ":9090"}, with(func(c *config.Config) { c.Addr = ":9090" })},
 		{"addr with port 0 is allowed", map[string]string{"TODO_ADDR": "127.0.0.1:0"}, with(func(c *config.Config) { c.Addr = "127.0.0.1:0" })},
 		{"ipv6 addr", map[string]string{"TODO_ADDR": "[::1]:8080"}, with(func(c *config.Config) { c.Addr = "[::1]:8080" })},
+		{"db path", map[string]string{"TODO_DB_PATH": "/tmp/x/todo.db"}, with(func(c *config.Config) { c.DBPath = "/tmp/x/todo.db" })},
 		{"level, any case", map[string]string{"TODO_LOG_LEVEL": "DEBUG"}, with(func(c *config.Config) { c.LogLevel = slog.LevelDebug })},
 		{"level with offset", map[string]string{"TODO_LOG_LEVEL": "warn+2"}, with(func(c *config.Config) { c.LogLevel = slog.LevelWarn + 2 })},
 		{"json format", map[string]string{"TODO_LOG_FORMAT": "json"}, with(func(c *config.Config) { c.LogFormat = "json" })},

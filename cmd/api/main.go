@@ -19,6 +19,7 @@ import (
 
 	"todoapp/internal/config"
 	"todoapp/internal/memstore"
+	"todoapp/internal/sqlite"
 	"todoapp/internal/todo"
 	"todoapp/internal/web"
 )
@@ -64,6 +65,19 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 	slog.SetDefault(logger) // log.Print and friends (the log package's default logger) now come out structured too, at INFO
 	ver := buildVersion()   // read once, like the config, and passed to whoever needs it
 
+	// Open the database and bring its schema up to date before anything can
+	// serve a request. The deferred Close runs when run returns, which is after
+	// serve has drained every in-flight request. Todos are still served from
+	// memory in this milestone; milestone 8 swaps the store.
+	db, err := sqlite.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := sqlite.Migrate(ctx, db, logger); err != nil {
+		return err
+	}
+
 	// Dependency wiring reads bottom-up: the store knows nothing about HTTP, the
 	// Service receives the store through the todo.Store interface, the server
 	// receives the Service, main receives the server. Nothing reaches for a
@@ -73,7 +87,8 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 	if err := seedIfEmpty(ctx, svc); err != nil {
 		return fmt.Errorf("seed: %w", err)
 	}
-	srv := web.NewServer(web.Deps{Service: svc, Logger: logger, Version: ver})
+	// db.PingContext has exactly the shape Ready wants: a method value is a func.
+	srv := web.NewServer(web.Deps{Service: svc, Logger: logger, Version: ver, Ready: db.PingContext})
 
 	// Bind here, synchronously, before anything runs in the background. A port
 	// that is already taken is an immediate error with a clear message, and
@@ -83,7 +98,7 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), stderr io.W
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	logger.Info("server listening", "addr", ln.Addr().String(), "version", ver)
+	logger.Info("server listening", "addr", ln.Addr().String(), "db", cfg.DBPath, "version", ver)
 
 	return serve(ctx, ln, srv, logger, cfg.ShutdownTimeout)
 }
@@ -159,9 +174,9 @@ func seedIfEmpty(ctx context.Context, svc *todo.Service) error {
 // returns nil. It takes a listener rather than an address so the shutdown test
 // controls the port, and it returns rather than exits so the test can observe
 // the result.
-func serve(ctx context.Context, ln net.Listener, handler http.Handler, logger *slog.Logger, shutdownTimeout time.Duration) error {
-	srv := &http.Server{
-		Handler: handler,
+func serve(ctx context.Context, ln net.Listener, srv *web.Server, logger *slog.Logger, shutdownTimeout time.Duration) error {
+	httpSrv := &http.Server{
+		Handler: srv,
 		// Each timeout defends against a different kind of slow or stuck client.
 		ReadHeaderTimeout: 5 * time.Second,                                     // headers must arrive promptly: stops a client that trickles one byte at a time (slowloris)
 		ReadTimeout:       10 * time.Second,                                    // the whole request, body included
@@ -186,7 +201,7 @@ func serve(ctx context.Context, ln net.Listener, handler http.Handler, logger *s
 	// exactly what a goroutine leak looks like. Rule of thumb: a goroutine that
 	// sends must never depend on a receive that an error return can skip.
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(ln) }()
+	go func() { errCh <- httpSrv.Serve(ln) }()
 
 	// select blocks until one of its cases can proceed, then runs that case
 	// only. If both are ready at once Go picks one at random; either way the
@@ -204,6 +219,7 @@ func serve(ctx context.Context, ln net.Listener, handler http.Handler, logger *s
 	}
 	// NotifyContext records which signal did it; context.Cause reads it back.
 	logger.Info("shutdown started", "cause", context.Cause(ctx), "timeout", shutdownTimeout)
+	srv.SetReady(false) // /readyz answers 503 from here on, so a load balancer stops routing to us before we close
 
 	// Shutdown stops accepting, closes idle connections, and waits for in-flight
 	// handlers to finish, up to the deadline of the context it is given. That
@@ -212,7 +228,7 @@ func serve(ctx context.Context, ln net.Listener, handler http.Handler, logger *s
 	// (returning context.Canceled) instead of waiting for it.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err) // context.DeadlineExceeded means handlers overran shutdownTimeout
 	}
 

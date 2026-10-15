@@ -19,6 +19,7 @@ import (
 // Config is everything the process needs from its environment.
 type Config struct {
 	Addr            string        // TODO_ADDR: host:port to listen on; loopback by default until authentication exists
+	DBPath          string        // TODO_DB_PATH: the SQLite file; its directory is created if missing
 	LogLevel        slog.Level    // TODO_LOG_LEVEL: debug, info, warn, error
 	LogFormat       string        // TODO_LOG_FORMAT: text for terminals, json for containers
 	ShutdownTimeout time.Duration // TODO_SHUTDOWN_TIMEOUT: how long in-flight requests get after a stop signal
@@ -29,6 +30,7 @@ type Config struct {
 // importer could assign to would silently change what every later Load returns.
 var defaults = Config{
 	Addr:            "127.0.0.1:8080",
+	DBPath:          "data/todo.db",
 	LogLevel:        slog.LevelInfo,
 	LogFormat:       "text",
 	ShutdownTimeout: 10 * time.Second,
@@ -68,6 +70,9 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		} else {
 			cfg.Addr = v
 		}
+	}
+	if v, ok := get("TODO_DB_PATH"); ok {
+		cfg.DBPath = v // anything non-empty: whether it can be opened is sqlite.Open's to say
 	}
 	if v, ok := get("TODO_LOG_LEVEL"); ok {
 		// slog.Level implements encoding.TextUnmarshaler, the standard library's

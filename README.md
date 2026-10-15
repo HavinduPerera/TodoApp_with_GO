@@ -14,14 +14,16 @@ and the full fifteen-milestone plan live in [ARCHITECTURE.md](ARCHITECTURE.md).
 | 4 | `todo.Store` interface, `todo.Service` (validation, timestamps, defaults), `POST`/`PATCH`/`DELETE`, strict JSON decoding, the full error envelope | done |
 | 5 | Store conformance suite in `internal/todo/todotest`, compile-time `Store` assertion, parallel handler tests, the race-detector exercise; example todos now seeded from `cmd/api` | done |
 | 6 | `internal/config` with `Load(lookup)`, log level and format, shutdown timeout, version stamping via `-ldflags -X` with a build-info fallback, `.env.example` and `.env` loading in the Makefile | done |
-| 7 | SQLite plumbing: driver, pragmas, embedded migrations, `/readyz` | next |
+| 7 | SQLite plumbing: the pure-Go driver, DSN pragmas (WAL, busy_timeout, foreign_keys), embedded forward-only migrations, `TODO_DB_PATH`, `GET /readyz`; todos still served from memory | done |
+| 8 | SQLite store replaces the in-memory store | next |
 
-Milestones 7 to 15 are described in ARCHITECTURE.md, section 11.
+Milestones 8 to 15 are described in ARCHITECTURE.md, section 11.
 
 ## Requirements
 
-- Go 1.27.1 (see `go.mod`). No other dependencies yet.
-- `make` and `curl` for the commands below.
+- Go 1.27.1 (see `go.mod`). One dependency: `modernc.org/sqlite`, a pure-Go SQLite
+  driver, so no C toolchain is needed and `CGO_ENABLED=0` builds a static binary.
+- `make`, `curl` and the `sqlite3` shell for the commands below.
 
 ## Run
 
@@ -41,6 +43,7 @@ that names it, and every invalid variable is reported together.
 | Variable | Default | Meaning |
 |---|---|---|
 | `TODO_ADDR` | `127.0.0.1:8080` | address to listen on; loopback only until authentication exists |
+| `TODO_DB_PATH` | `data/todo.db` | the SQLite file; its directory is created on first start |
 | `TODO_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` (any case; offsets like `warn+2` work) |
 | `TODO_LOG_FORMAT` | `text` | `text` for a terminal, `json` for anything that collects logs |
 | `TODO_SHUTDOWN_TIMEOUT` | `10s` | how long in-flight requests get after a stop signal |
@@ -59,6 +62,15 @@ make targets, so to override it for one run pass a make variable instead:
 make run TODO_ADDR=127.0.0.1:9090
 ```
 
+## Database
+
+On first start the server creates the SQLite file at `TODO_DB_PATH` (with the
+`-wal` and `-shm` files SQLite's write-ahead log needs) and applies the
+migrations embedded in the binary, one transaction each, recording them in
+`schema_migrations`. Restarts apply only what is new. Never copy a live database
+file: the `-wal` file holds committed data, so use `sqlite3 data/todo.db
+".backup out.db"` instead.
+
 `make build` stamps the git revision into the binary, and the startup log and
 `/healthz` report it. A plain `go build` reports the revision the go command
 records itself; `go run` reports `dev`.
@@ -68,6 +80,7 @@ records itself; `go run` reports `dev`.
 | Method | Path | Response |
 |---|---|---|
 | GET | `/healthz` | `{"status":"ok","version":"<git revision>"}`; liveness only, touches nothing else |
+| GET | `/readyz` | `200 {"status":"ok"}` when the database answers a ping within a second; `503 {"status":"unavailable","reason":…}` otherwise, and from the moment shutdown begins |
 | GET | `/api/todos` | `{"items":[…],"total":2,"limit":50,"offset":0}`, newest first (in-memory until milestone 8) |
 | GET | `/api/todos/{id}` | one todo; `404` `not_found` if it does not exist, `400` `bad_request` if the id is not a positive integer |
 | GET | `/api/todos/stats` | `{"total":2,"open":1,"done":1}` |
@@ -110,6 +123,7 @@ curl -si -X DELETE localhost:8080/api/todos/3
 | `make test` | `go test -race -shuffle=on -count=1 ./...`; try removing the lock in `memstore.Create` and watch `concurrent_writers` report a data race |
 | `make vet` | `go vet ./...` |
 | `make fmt` | fails if any file is not `gofmt`-formatted |
+| `make db-shell` | opens the development database in the `sqlite3` shell |
 
 ## Layout
 
@@ -118,7 +132,8 @@ cmd/api/            main.go (wiring and lifecycle), main_test.go
 internal/config/    environment variables → one validated Config
 internal/todo/      the domain: Todo and params, validation, the Store interface, the Service; stdlib only
 internal/todo/todotest/  the conformance suite every Store must pass (run by memstore now, SQLite later)
-internal/memstore/  in-memory store: RWMutex + map; starts empty
+internal/memstore/  in-memory store: RWMutex + map; starts empty (retires in milestone 8)
+internal/sqlite/    Open (DSN pragmas, one connection), embedded migrations and the runner
 internal/web/       HTTP: routes, handlers, strict JSON decoding, the error envelope
 ARCHITECTURE.md     design, decisions, milestones
 Makefile

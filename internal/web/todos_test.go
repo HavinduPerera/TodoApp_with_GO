@@ -3,7 +3,10 @@
 package web_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -110,6 +113,58 @@ func TestHealthz(t *testing.T) {
 	if body.Status != "ok" || body.Version != "test" {
 		t.Errorf("body = %+v, want status ok and the Version NewServer was given", body)
 	}
+}
+
+func TestReadyz(t *testing.T) {
+	t.Parallel()
+	newWith := func(ready func(context.Context) error) *web.Server {
+		return web.NewServer(web.Deps{Service: todo.NewService(memstore.New()), Logger: slog.New(slog.DiscardHandler), Ready: ready})
+	}
+	type status struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	t.Run("ok when the check passes", func(t *testing.T) {
+		t.Parallel()
+		res := get(t, newWith(func(context.Context) error { return nil }), "/readyz")
+		var body status
+		decode(t, res, &body)
+		if res.StatusCode != http.StatusOK || body.Status != "ok" {
+			t.Errorf("status = %d, body = %+v; want 200 and ok", res.StatusCode, body)
+		}
+	})
+	t.Run("503 with the reason when the check fails", func(t *testing.T) {
+		t.Parallel()
+		res := get(t, newWith(func(context.Context) error { return errors.New("database is locked") }), "/readyz")
+		var body status
+		decode(t, res, &body)
+		if res.StatusCode != http.StatusServiceUnavailable || body.Reason != "db: database is locked" {
+			t.Errorf("status = %d, body = %+v; want 503 and the db reason", res.StatusCode, body)
+		}
+	})
+	t.Run("503 while shutting down, without calling the check", func(t *testing.T) {
+		t.Parallel()
+		srv := newWith(func(context.Context) error { t.Error("check must not run once SetReady(false) was called"); return nil })
+		srv.SetReady(false)
+		res := get(t, srv, "/readyz")
+		var body status
+		decode(t, res, &body)
+		if res.StatusCode != http.StatusServiceUnavailable || body.Reason != "shutting down" {
+			t.Errorf("status = %d, body = %+v; want 503 and shutting down", res.StatusCode, body)
+		}
+	})
+	t.Run("check gets a context that expires", func(t *testing.T) {
+		t.Parallel()
+		res := get(t, newWith(func(ctx context.Context) error {
+			if dl, ok := ctx.Deadline(); !ok || time.Until(dl) > time.Second {
+				return fmt.Errorf("readiness deadline = %v, want one within 1s", dl)
+			}
+			return nil
+		}), "/readyz")
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want 200: the check must receive a context with a deadline", res.StatusCode)
+		}
+	})
 }
 
 func TestReadRoutes(t *testing.T) {

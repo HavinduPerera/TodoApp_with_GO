@@ -16,7 +16,7 @@ PKG     := ./cmd/api
 VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: run build test vet fmt
+.PHONY: run build test vet fmt db-shell
 
 run:   ; go run $(PKG)
 build: ; CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN) $(PKG)
@@ -24,3 +24,5 @@ test:  ; go test -race -shuffle=on -count=1 ./...
 vet:   ; go vet ./...
 # gofmt -l prints unformatted files on stdout but parse errors on stderr (exit 2); capture both so neither slips through.
 fmt:   ; @out="$$(gofmt -l . 2>&1)"; test -z "$$out" || { printf '%s\n' "$$out"; echo "run gofmt -w ."; exit 1; }
+# Open the development database in the sqlite3 shell: TODO_DB_PATH from .env, your shell or a make variable, else the default.
+db-shell: ; sqlite3 $(or $(TODO_DB_PATH),data/todo.db)

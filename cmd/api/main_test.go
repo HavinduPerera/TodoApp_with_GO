@@ -28,10 +28,10 @@ func TestServeShutsDown(t *testing.T) {
 	defer cancel() // if the test fails early, this still lets serve return and the goroutine exit
 
 	logger := slog.New(slog.DiscardHandler)
-	handler := web.NewServer(web.Deps{Service: todo.NewService(memstore.New()), Logger: logger})
+	srv := web.NewServer(web.Deps{Service: todo.NewService(memstore.New()), Logger: logger})
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- serve(ctx, ln, handler, logger, 2*time.Second)
+		errCh <- serve(ctx, ln, srv, logger, 2*time.Second)
 	}()
 
 	// First prove the server is really serving: a request over the network gets

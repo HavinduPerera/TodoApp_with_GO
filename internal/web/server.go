@@ -5,8 +5,10 @@
 package web
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 
 	"todoapp/internal/todo"
 )
@@ -25,15 +27,20 @@ type Deps struct {
 	Logger *slog.Logger
 	// Version is reported by /healthz so an operator can see what is running.
 	Version string
+	// Ready checks the dependencies /readyz must vouch for, today the database
+	// (db.PingContext fits the signature). nil means there is nothing to check.
+	Ready func(context.Context) error
 }
 
 // Server is the http.Handler for the whole app. Create it with NewServer: the
 // zero value has a nil mux, so its ServeHTTP panics rather than answering 404.
 type Server struct {
-	svc     *todo.Service
-	logger  *slog.Logger
-	version string
-	mux     *http.ServeMux
+	svc        *todo.Service
+	logger     *slog.Logger
+	version    string
+	checkReady func(context.Context) error
+	ready      atomic.Bool // flipped to false by SetReady when shutdown begins; read by /readyz on every request
+	mux        *http.ServeMux
 }
 
 // NewServer wires routes to handlers. It returns the concrete *Server rather
@@ -45,12 +52,22 @@ func NewServer(d Deps) *Server {
 	if d.Service == nil {
 		panic("web: Deps.Service is nil") // a wiring mistake is a programmer error: fail at construction, not on the first request
 	}
-	s := &Server{svc: d.Service, logger: d.Logger, version: d.Version, mux: http.NewServeMux()}
+	s := &Server{svc: d.Service, logger: d.Logger, version: d.Version, checkReady: d.Ready, mux: http.NewServeMux()}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}
+	s.ready.Store(true)
 	s.routes()
 	return s
+}
+
+// SetReady tells /readyz whether to vouch for this process. serve() calls
+// SetReady(false) before http.Server.Shutdown, so a load balancer that polls
+// /readyz stops sending new requests here while the ones in flight finish.
+// atomic.Bool because the HTTP handlers read it from their own goroutines
+// while the shutdown goroutine writes it: a plain bool would be a data race.
+func (s *Server) SetReady(ok bool) {
+	s.ready.Store(ok)
 }
 
 // ServeHTTP makes *Server an http.Handler. Milestone 9 wraps the mux in
